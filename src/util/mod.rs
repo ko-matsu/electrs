@@ -18,6 +18,8 @@ use std::thread;
 
 use crate::chain::BlockHeader;
 use bitcoin::hashes::sha256d::Hash as Sha256dHash;
+use socket2::{Domain, Protocol, Socket, Type};
+use std::net::SocketAddr;
 
 pub type Bytes = Vec<u8>;
 pub type HeaderMap = HashMap<Sha256dHash, BlockHeader>;
@@ -89,4 +91,78 @@ where
         .name(name.to_owned())
         .spawn(f)
         .unwrap()
+}
+
+// Similar to https://doc.rust-lang.org/std/primitive.bool.html#method.then (nightly only),
+// but with a function that returns an `Option<T>` instead of `T`. Adding something like
+// this to std is being discussed: https://github.com/rust-lang/rust/issues/64260
+
+pub trait BoolThen {
+    fn and_then<T>(self, f: impl FnOnce() -> Option<T>) -> Option<T>;
+}
+
+impl BoolThen for bool {
+    fn and_then<T>(self, f: impl FnOnce() -> Option<T>) -> Option<T> {
+        if self {
+            f()
+        } else {
+            None
+        }
+    }
+}
+
+pub fn create_socket(addr: &SocketAddr) -> Socket {
+    let domain = match &addr {
+        SocketAddr::V4(_) => Domain::ipv4(),
+        SocketAddr::V6(_) => Domain::ipv6(),
+    };
+    let socket =
+        Socket::new(domain, Type::stream(), Some(Protocol::tcp())).expect("creating socket failed");
+
+    #[cfg(unix)]
+    socket
+        .set_reuse_port(true)
+        .expect("cannot enable SO_REUSEPORT");
+
+    socket.bind(&addr.clone().into()).expect("cannot bind");
+
+    socket
+}
+
+/// A module used for serde serialization of bytes in hexadecimal format.
+///
+/// The module is compatible with the serde attribute.
+///
+/// Copied from https://github.com/rust-bitcoin/rust-bitcoincore-rpc/blob/master/json/src/lib.rs
+pub mod serde_hex {
+    use bitcoin::hashes::hex::{FromHex, ToHex};
+    use serde::de::Error;
+    use serde::{Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(b: &Vec<u8>, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&b.to_hex())
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
+        let hex_str: String = ::serde::Deserialize::deserialize(d)?;
+        Ok(FromHex::from_hex(&hex_str).map_err(D::Error::custom)?)
+    }
+
+    pub mod opt {
+        use bitcoin::hashes::hex::{FromHex, ToHex};
+        use serde::de::Error;
+        use serde::{Deserializer, Serializer};
+
+        pub fn serialize<S: Serializer>(b: &Option<Vec<u8>>, s: S) -> Result<S::Ok, S::Error> {
+            match *b {
+                None => s.serialize_none(),
+                Some(ref b) => s.serialize_str(&b.to_hex()),
+            }
+        }
+
+        pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Vec<u8>>, D::Error> {
+            let hex_str: String = ::serde::Deserialize::deserialize(d)?;
+            Ok(Some(FromHex::from_hex(&hex_str).map_err(D::Error::custom)?))
+        }
+    }
 }

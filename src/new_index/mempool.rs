@@ -121,15 +121,28 @@ impl Mempool {
         self.edges.contains_key(outpoint)
     }
 
-    // XXX return as Vec<(Transaction,Option<BlockId>)>?
+    pub fn get_tx_fee(&self, txid: &Txid) -> Option<u64> {
+        Some(self.feeinfo.get(txid)?.fee)
+    }
+
+    pub fn has_unconfirmed_parents(&self, txid: &Txid) -> bool {
+        let tx = match self.txstore.get(txid) {
+            Some(tx) => tx,
+            None => return false,
+        };
+        tx.input
+            .iter()
+            .any(|txin| self.txstore.contains_key(&txin.previous_output.txid))
+    }
+
     pub fn history(&self, scripthash: &[u8], limit: usize) -> Vec<Transaction> {
+        let _timer = self.latency.with_label_values(&["history"]).start_timer();
         self.history
             .get(scripthash)
             .map_or_else(|| vec![], |entries| self._history(entries, limit))
     }
 
     fn _history(&self, entries: &[TxHistoryInfo], limit: usize) -> Vec<Transaction> {
-        let _timer = self.latency.with_label_values(&["history"]).start_timer();
         entries
             .iter()
             .map(|e| e.get_txid())
@@ -166,18 +179,27 @@ impl Mempool {
         entries
             .iter()
             .filter_map(|entry| match entry {
-                TxHistoryInfo::Funding(info) => Some(Utxo {
-                    txid: deserialize(&info.txid).expect("invalid txid"),
-                    vout: info.vout as u32,
-                    value: info.value,
-                    confirmed: None,
-
+                TxHistoryInfo::Funding(info) => {
+                    // Liquid requires some additional information from the txo that's not available in the TxHistoryInfo index.
                     #[cfg(feature = "liquid")]
-                    asset: self
+                    let txo = self
                         .lookup_txo(&entry.get_funded_outpoint())
-                        .expect("missing txo")
-                        .asset,
-                }),
+                        .expect("missing txo");
+
+                    Some(Utxo {
+                        txid: deserialize(&info.txid).expect("invalid txid"),
+                        vout: info.vout as u32,
+                        value: info.value,
+                        confirmed: None,
+
+                        #[cfg(feature = "liquid")]
+                        asset: txo.asset,
+                        #[cfg(feature = "liquid")]
+                        nonce: txo.nonce,
+                        #[cfg(feature = "liquid")]
+                        witness: txo.witness,
+                    })
+                }
                 TxHistoryInfo::Spending(_) => None,
                 #[cfg(feature = "liquid")]
                 TxHistoryInfo::Issuing(_)
@@ -356,12 +378,14 @@ impl Mempool {
                 )
             });
 
+            let config = &self.config;
+
             // An iterator over (ScriptHash, TxHistoryInfo)
             let funding = tx
                 .output
                 .iter()
                 .enumerate()
-                .filter(|(_, txo)| is_spendable(txo))
+                .filter(|(_, txo)| is_spendable(txo) || config.index_unspendables)
                 .map(|(index, txo)| {
                     (
                         compute_script_hash(&txo.script_pubkey),
@@ -428,6 +452,11 @@ impl Mempool {
     }
 
     fn get_prevouts(&self, txids: &[Txid]) -> BTreeSet<OutPoint> {
+        let _timer = self
+            .latency
+            .with_label_values(&["get_prevouts"])
+            .start_timer();
+
         txids
             .iter()
             .map(|txid| self.txstore.get(txid).expect("missing mempool tx"))
@@ -476,6 +505,10 @@ impl Mempool {
 
     #[cfg(feature = "liquid")]
     pub fn asset_history(&self, asset_id: &AssetId, limit: usize) -> Vec<Transaction> {
+        let _timer = self
+            .latency
+            .with_label_values(&["asset_history"])
+            .start_timer();
         self.asset_history
             .get(asset_id)
             .map_or_else(|| vec![], |entries| self._history(entries, limit))

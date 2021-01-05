@@ -12,6 +12,8 @@ use crate::daemon::CookieGetter;
 
 use crate::errors::*;
 
+const ELECTRS_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 #[derive(Debug, Clone)]
 pub struct Config {
     // See below for the documentation of each field:
@@ -19,22 +21,34 @@ pub struct Config {
     pub network_type: Network,
     pub db_path: PathBuf,
     pub daemon_dir: PathBuf,
+    pub blocks_dir: PathBuf,
     pub daemon_rpc_addr: SocketAddr,
     pub cookie: Option<String>,
     pub electrum_rpc_addr: SocketAddr,
     pub http_addr: SocketAddr,
+    pub http_socket_file: Option<PathBuf>,
     pub monitoring_addr: SocketAddr,
     pub jsonrpc_import: bool,
     pub light_mode: bool,
     pub address_search: bool,
+    pub index_unspendables: bool,
     pub cors: Option<String>,
     pub precache_scripts: Option<String>,
+    pub utxos_limit: usize,
     pub electrum_txs_limit: usize,
+    pub electrum_banner: String,
 
     #[cfg(feature = "liquid")]
     pub parent_network: Network,
     #[cfg(feature = "liquid")]
     pub asset_db_path: Option<PathBuf>,
+
+    #[cfg(feature = "electrum-discovery")]
+    pub electrum_public_hosts: Option<crate::electrum::ServerHosts>,
+    #[cfg(feature = "electrum-discovery")]
+    pub electrum_announce: bool,
+    #[cfg(feature = "electrum-discovery")]
+    pub tor_proxy: Option<std::net::SocketAddr>,
 }
 
 fn str_to_socketaddr(address: &str, what: &str) -> SocketAddr {
@@ -76,6 +90,12 @@ impl Config {
                 Arg::with_name("daemon_dir")
                     .long("daemon-dir")
                     .help("Data directory of Bitcoind (default: ~/.bitcoin/)")
+                    .takes_value(true),
+            )
+            .arg(
+                Arg::with_name("blocks_dir")
+                    .long("blocks-dir")
+                    .help("Analogous to bitcoind's -blocksdir option, this specifies the directory containing the raw blocks files (blk*.dat) (default: ~/.bitcoin/blocks/)")
                     .takes_value(true),
             )
             .arg(
@@ -130,6 +150,11 @@ impl Config {
                     .help("Enable prefix address search")
             )
             .arg(
+                Arg::with_name("index_unspendables")
+                    .long("index-unspendables")
+                    .help("Enable indexing of provably unspendable outputs")
+            )
+            .arg(
                 Arg::with_name("cors")
                     .long("cors")
                     .help("Origins allowed to make cross-site requests")
@@ -142,10 +167,29 @@ impl Config {
                     .takes_value(true)
             )
             .arg(
+                Arg::with_name("utxos_limit")
+                    .long("utxos-limit")
+                    .help("Maximum number of utxos to process per address. Lookups for addresses with more utxos will fail. Applies to the Electrum and HTTP APIs.")
+                    .default_value("500")
+            )
+            .arg(
                 Arg::with_name("electrum_txs_limit")
                     .long("electrum-txs-limit")
                     .help("Maximum number of transactions returned by Electrum history queries. Lookups with more results will fail.")
-                    .default_value("100")
+                    .default_value("500")
+            ).arg(
+                Arg::with_name("electrum_banner")
+                    .long("electrum-banner")
+                    .help("Welcome banner for the Electrum server, shown in the console to clients.")
+                    .takes_value(true)
+            );
+
+        #[cfg(unix)]
+        let args = args.arg(
+                Arg::with_name("http_socket_file")
+                    .long("http-socket-file")
+                    .help("HTTP server 'unix socket file' to listen on (default disabled, enabling this disables the http server)")
+                    .takes_value(true),
             );
 
         #[cfg(feature = "liquid")]
@@ -162,6 +206,23 @@ impl Config {
                     .help("Directory for liquid/elements asset db")
                     .takes_value(true),
             );
+
+        #[cfg(feature = "electrum-discovery")]
+        let args = args.arg(
+                Arg::with_name("electrum_public_hosts")
+                    .long("electrum-public-hosts")
+                    .help("A dictionary of hosts where the Electrum server can be reached at. Required to enable server discovery. See https://electrumx.readthedocs.io/en/latest/protocol-methods.html#server-features")
+                    .takes_value(true)
+            ).arg(
+                Arg::with_name("electrum_announce")
+                    .long("electrum-announce")
+                    .help("Announce the Electrum server to other servers")
+            ).arg(
+            Arg::with_name("tor_proxy")
+                .long("tor-proxy")
+                .help("ip:addr of socks proxy for accessing onion hosts")
+                .takes_value(true),
+        );
 
         let m = args.get_matches();
 
@@ -239,6 +300,8 @@ impl Config {
                 .unwrap_or(&format!("127.0.0.1:{}", default_http_port)),
             "HTTP Server",
         );
+
+        let http_socket_file: Option<PathBuf> = m.value_of("http_socket_file").map(PathBuf::from);
         let monitoring_addr: SocketAddr = str_to_socketaddr(
             m.value_of("monitoring_addr")
                 .unwrap_or(&format!("127.0.0.1:{}", default_monitoring_port)),
@@ -263,7 +326,21 @@ impl Config {
             #[cfg(feature = "liquid")]
             Network::LiquidRegtest => daemon_dir.push("liquidregtest"),
         }
+        let blocks_dir = m
+            .value_of("blocks_dir")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| daemon_dir.join("blocks"));
         let cookie = m.value_of("cookie").map(|s| s.to_owned());
+
+        let electrum_banner = m.value_of("electrum_banner").map_or_else(
+            || format!("Welcome to electrs-esplora {}", ELECTRS_VERSION),
+            |s| s.into(),
+        );
+
+        #[cfg(feature = "electrum-discovery")]
+        let electrum_public_hosts = m
+            .value_of("electrum_public_hosts")
+            .map(|s| serde_json::from_str(s).expect("invalid --electrum-public-hosts"));
 
         let mut log = stderrlog::new();
         log.verbosity(m.occurrences_of("verbosity") as usize);
@@ -278,22 +355,34 @@ impl Config {
             network_type,
             db_path,
             daemon_dir,
+            blocks_dir,
             daemon_rpc_addr,
             cookie,
+            utxos_limit: value_t_or_exit!(m, "utxos_limit", usize),
             electrum_rpc_addr,
+            electrum_txs_limit: value_t_or_exit!(m, "electrum_txs_limit", usize),
+            electrum_banner,
             http_addr,
+            http_socket_file,
             monitoring_addr,
             jsonrpc_import: m.is_present("jsonrpc_import"),
             light_mode: m.is_present("light_mode"),
             address_search: m.is_present("address_search"),
+            index_unspendables: m.is_present("index_unspendables"),
             cors: m.value_of("cors").map(|s| s.to_string()),
             precache_scripts: m.value_of("precache_scripts").map(|s| s.to_string()),
-            electrum_txs_limit: value_t_or_exit!(m, "electrum_txs_limit", usize),
 
             #[cfg(feature = "liquid")]
             parent_network,
             #[cfg(feature = "liquid")]
             asset_db_path,
+
+            #[cfg(feature = "electrum-discovery")]
+            electrum_public_hosts,
+            #[cfg(feature = "electrum-discovery")]
+            electrum_announce: m.is_present("electrum_announce"),
+            #[cfg(feature = "electrum-discovery")]
+            tor_proxy: m.value_of("tor_proxy").map(|s| s.parse().unwrap()),
         };
         eprintln!("{:?}", config);
         config

@@ -3,9 +3,9 @@ use crate::config::Config;
 use crate::errors;
 use crate::new_index::{compute_script_hash, Query, SpendingInput, Utxo};
 use crate::util::{
-    electrum_merkle, extract_tx_prevouts, full_hash, get_innerscripts, get_script_asm, get_tx_fee,
-    has_prevout, is_coinbase, script_to_address, BlockHeaderMeta, BlockId, FullHash,
-    TransactionStatus,
+    create_socket, electrum_merkle, extract_tx_prevouts, full_hash, get_innerscripts,
+    get_script_asm, get_tx_fee, has_prevout, is_coinbase, script_to_address, BlockHeaderMeta,
+    BlockId, FullHash, TransactionStatus,
 };
 
 #[cfg(not(feature = "liquid"))]
@@ -13,17 +13,18 @@ use bitcoin::consensus::encode;
 use bitcoin::hashes::hex::{FromHex, ToHex};
 use bitcoin::hashes::Error as HashError;
 use bitcoin::{BitcoinHash, BlockHash, Script, Txid};
-use futures::sync::oneshot;
 use hex::{self, FromHexError};
-use hyper::rt::{self, Future, Stream};
-use hyper::service::service_fn;
-use hyper::{Body, Method, Request, Response, Server, StatusCode};
+use hyper::service::{make_service_fn, service_fn};
+use hyper::{Body, Method, Response, Server, StatusCode};
+use tokio::sync::oneshot;
 
+use hyperlocal::UnixServerExt;
+use std::fs;
 #[cfg(feature = "liquid")]
 use {
-    crate::elements::{peg::PegoutValue, IssuanceValue},
+    crate::elements::{peg::PegoutValue, AssetSorting, IssuanceValue},
     elements::{
-        confidential::{Asset, Value},
+        confidential::{Asset, Nonce, Value},
         encode, AssetId,
     },
 };
@@ -32,6 +33,7 @@ use serde::Serialize;
 use serde_json;
 use std::collections::HashMap;
 use std::num::ParseIntError;
+use std::os::unix::fs::FileTypeExt;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::thread;
@@ -42,8 +44,14 @@ const MAX_MEMPOOL_TXS: usize = 50;
 const BLOCK_LIMIT: usize = 10;
 const ADDRESS_SEARCH_LIMIT: usize = 10;
 
+#[cfg(feature = "liquid")]
+const ASSETS_PER_PAGE: usize = 25;
+#[cfg(feature = "liquid")]
+const ASSETS_MAX_PER_PAGE: usize = 100;
+
 const TTL_LONG: u32 = 157_784_630; // ttl for static resources (5 years)
 const TTL_SHORT: u32 = 10; // ttl for volatie resources
+const TTL_MEMPOOL_RECENT: u32 = 5; // ttl for GET /mempool/recent
 const CONF_FINAL: usize = 10; // reorgs deeper than this are considered unlikely
 
 #[derive(Serialize, Deserialize)]
@@ -57,6 +65,7 @@ struct BlockValue {
     weight: u32,
     merkle_root: String,
     previousblockhash: Option<String>,
+    mediantime: u32,
 
     #[cfg(not(feature = "liquid"))]
     nonce: u32,
@@ -88,6 +97,7 @@ impl BlockValue {
             } else {
                 None
             },
+            mediantime: blockhm.mtp,
 
             #[cfg(not(feature = "liquid"))]
             bits: header.bits,
@@ -360,6 +370,22 @@ struct UtxoValue {
     #[cfg(feature = "liquid")]
     #[serde(skip_serializing_if = "Option::is_none")]
     assetcommitment: Option<String>,
+
+    #[cfg(feature = "liquid")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    nonce: Option<String>,
+
+    #[cfg(feature = "liquid")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    noncecommitment: Option<String>,
+
+    #[cfg(feature = "liquid")]
+    #[serde(skip_serializing_if = "Vec::is_empty", with = "crate::util::serde_hex")]
+    surjection_proof: Vec<u8>,
+
+    #[cfg(feature = "liquid")]
+    #[serde(skip_serializing_if = "Vec::is_empty", with = "crate::util::serde_hex")]
+    range_proof: Vec<u8>,
 }
 impl From<Utxo> for UtxoValue {
     fn from(utxo: Utxo) -> Self {
@@ -391,6 +417,20 @@ impl From<Utxo> for UtxoValue {
                 Asset::Confidential(..) => Some(hex::encode(encode::serialize(&utxo.asset))),
                 _ => None,
             },
+            #[cfg(feature = "liquid")]
+            nonce: match utxo.nonce {
+                Nonce::Explicit(nonce) => Some(nonce.to_hex()),
+                _ => None,
+            },
+            #[cfg(feature = "liquid")]
+            noncecommitment: match utxo.nonce {
+                Nonce::Confidential(..) => Some(hex::encode(encode::serialize(&utxo.nonce))),
+                _ => None,
+            },
+            #[cfg(feature = "liquid")]
+            surjection_proof: utxo.witness.surjection_proof,
+            #[cfg(feature = "liquid")]
+            range_proof: utxo.witness.rangeproof,
         }
     }
 }
@@ -458,53 +498,94 @@ fn prepare_txs(
         .collect()
 }
 
-type BoxFut = Box<dyn Future<Item = Response<Body>, Error = hyper::Error> + Send>;
-
-pub fn run_server(config: Arc<Config>, query: Arc<Query>) -> Handle {
+#[tokio::main]
+async fn run_server(config: Arc<Config>, query: Arc<Query>, rx: oneshot::Receiver<()>) {
     let addr = &config.http_addr;
-    info!("REST server running on {}", addr);
+    let socket_file = &config.http_socket_file;
 
-    let config = Arc::new(config.clone());
+    let config = Arc::clone(&config);
+    let query = Arc::clone(&query);
 
-    let new_service = move || {
+    let make_service_fn_inn = || {
         let query = Arc::clone(&query);
         let config = Arc::clone(&config);
 
-        service_fn(move |req: Request<Body>| -> BoxFut {
-            let method = req.method().clone();
-            let uri = req.uri().clone();
-            let query = Arc::clone(&query);
-            let config = Arc::clone(&config);
-            let future = req.into_body().concat2().and_then(move |body| {
-                let mut resp =
-                    handle_request(method, uri, body, &query, &config).unwrap_or_else(|err| {
-                        warn!("{:?}", err);
-                        Response::builder()
-                            .status(err.0)
-                            .header("Content-Type", "text/plain")
-                            .body(Body::from(err.1))
-                            .unwrap()
-                    });
-                if let Some(ref origins) = config.cors {
-                    resp.headers_mut()
-                        .insert("Access-Control-Allow-Origin", origins.parse().unwrap());
+        async move {
+            Ok::<_, hyper::Error>(service_fn(move |req| {
+                let query = Arc::clone(&query);
+                let config = Arc::clone(&config);
+
+                async move {
+                    let method = req.method().clone();
+                    let uri = req.uri().clone();
+                    let body = hyper::body::to_bytes(req.into_body()).await?;
+
+                    let mut resp = handle_request(method, uri, body, &query, &config)
+                        .unwrap_or_else(|err| {
+                            warn!("{:?}", err);
+                            Response::builder()
+                                .status(err.0)
+                                .header("Content-Type", "text/plain")
+                                .body(Body::from(err.1))
+                                .unwrap()
+                        });
+                    if let Some(ref origins) = config.cors {
+                        resp.headers_mut()
+                            .insert("Access-Control-Allow-Origin", origins.parse().unwrap());
+                    }
+                    Ok::<_, hyper::Error>(resp)
                 }
-                Ok(resp)
-            });
-            Box::new(future)
-        })
+            }))
+        }
     };
 
+    let server = match socket_file {
+        None => {
+            info!("REST server running on {}", addr);
+
+            let socket = create_socket(&addr);
+            socket.listen(511).expect("setting backlog failed");
+
+            Server::from_tcp(socket.into_tcp_listener())
+                .expect("Server::from_tcp failed")
+                .serve(make_service_fn(move |_| make_service_fn_inn()))
+                .with_graceful_shutdown(async {
+                    rx.await.ok();
+                })
+                .await
+        }
+        Some(path) => {
+            if let Ok(meta) = fs::metadata(&path) {
+                // Cleanup socket file left by previous execution
+                if meta.file_type().is_socket() {
+                    fs::remove_file(path).ok();
+                }
+            }
+
+            info!("REST server running on unix socket {}", path.display());
+
+            Server::bind_unix(path)
+                .expect("Server::bind_unix failed")
+                .serve(make_service_fn(move |_| make_service_fn_inn()))
+                .with_graceful_shutdown(async {
+                    rx.await.ok();
+                })
+                .await
+        }
+    };
+
+    if let Err(e) = server {
+        eprintln!("server error: {}", e);
+    }
+}
+
+pub fn start(config: Arc<Config>, query: Arc<Query>) -> Handle {
     let (tx, rx) = oneshot::channel::<()>();
-    let server = Server::bind(&addr)
-        .serve(new_service)
-        .with_graceful_shutdown(rx)
-        .map_err(|e| eprintln!("server error: {}", e));
 
     Handle {
         tx,
         thread: thread::spawn(move || {
-            rt::run(server);
+            run_server(config, query, rx);
         }),
     }
 }
@@ -524,7 +605,7 @@ impl Handle {
 fn handle_request(
     method: Method,
     uri: hyper::Uri,
-    body: hyper::Chunk,
+    body: hyper::body::Bytes,
     query: &Query,
     config: &Config,
 ) -> Result<Response<Body>, HttpError> {
@@ -594,6 +675,16 @@ fn handle_request(
                 .ok_or_else(|| HttpError::not_found("Block not found".to_string()))?;
             json_response(txids, TTL_LONG)
         }
+        (&Method::GET, Some(&"block"), Some(hash), Some(&"header"), None, None) => {
+            let hash = BlockHash::from_hex(hash)?;
+            let header = query
+                .chain()
+                .get_block_header(&hash)
+                .ok_or_else(|| HttpError::not_found("Block not found".to_string()))?;
+
+            let header_hex = hex::encode(encode::serialize(&header));
+            http_message(StatusCode::OK, header_hex, TTL_LONG)
+        }
         (&Method::GET, Some(&"block"), Some(hash), Some(&"raw"), None, None) => {
             let hash = BlockHash::from_hex(hash)?;
             let raw = query
@@ -639,7 +730,7 @@ fn handle_request(
                 )));
             }
 
-            // header_by_hash() only returns the BlockId for non-orphaned blocks,
+            // blockid_by_hash() only returns the BlockId for non-orphaned blocks,
             // or None for orphaned
             let confirmed_blockid = query.chain().blockid_by_hash(&hash);
 
@@ -790,7 +881,7 @@ fn handle_request(
         ) => {
             let script_hash = to_scripthash(script_type, script_str, config.network_type)?;
             let utxos: Vec<UtxoValue> = query
-                .utxo(&script_hash[..])
+                .utxo(&script_hash[..])?
                 .into_iter()
                 .map(UtxoValue::from)
                 .collect();
@@ -934,11 +1025,37 @@ fn handle_request(
         (&Method::GET, Some(&"mempool"), Some(&"recent"), None, None, None) => {
             let mempool = query.mempool();
             let recent = mempool.recent_txs_overview();
-            json_response(recent, TTL_SHORT /* TODO: TTL TBD */)
+            json_response(recent, TTL_MEMPOOL_RECENT)
         }
 
         (&Method::GET, Some(&"fee-estimates"), None, None, None, None) => {
             json_response(query.estimate_fee_map(), TTL_SHORT)
+        }
+
+        #[cfg(feature = "liquid")]
+        (&Method::GET, Some(&"assets"), Some(&"registry"), None, None, None) => {
+            let start_index: usize = query_params
+                .get("start_index")
+                .and_then(|n| n.parse().ok())
+                .unwrap_or(0);
+
+            let limit: usize = query_params
+                .get("limit")
+                .and_then(|n| n.parse().ok())
+                .map(|n: usize| n.min(ASSETS_MAX_PER_PAGE))
+                .unwrap_or(ASSETS_PER_PAGE);
+
+            let sorting = AssetSorting::from_query_params(&query_params)?;
+
+            let (total_num, assets) = query.list_registry_assets(start_index, limit, sorting)?;
+
+            Ok(Response::builder()
+                // Disable caching because we don't currently support caching with query string params
+                .header("Cache-Control", "no-store")
+                .header("Content-Type", "application/json")
+                .header("X-Total-Results", total_num.to_string())
+                .body(Body::from(serde_json::to_string(&assets)?))
+                .unwrap())
         }
 
         #[cfg(feature = "liquid")]
@@ -1010,6 +1127,26 @@ fn handle_request(
                 .collect();
 
             json_response(prepare_txs(txs, query, config), TTL_SHORT)
+        }
+
+        #[cfg(feature = "liquid")]
+        (&Method::GET, Some(&"asset"), Some(asset_str), Some(&"supply"), param, None) => {
+            let asset_id = AssetId::from_hex(asset_str)?;
+            let asset_entry = query
+                .lookup_asset(&asset_id)?
+                .ok_or_else(|| HttpError::not_found("Asset id not found".to_string()))?;
+
+            let supply = asset_entry
+                .supply()
+                .ok_or_else(|| HttpError::from("Asset supply is blinded".to_string()))?;
+            let precision = asset_entry.precision();
+
+            if param == Some(&"decimal") && precision > 0 {
+                let supply_dec = supply as f64 / 10u32.pow(precision.into()) as f64;
+                http_message(StatusCode::OK, supply_dec.to_string(), TTL_SHORT)
+            } else {
+                http_message(StatusCode::OK, supply.to_string(), TTL_SHORT)
+            }
         }
 
         _ => Err(HttpError::not_found(format!(
@@ -1128,9 +1265,6 @@ impl HttpError {
     fn not_found(msg: String) -> Self {
         HttpError(StatusCode::NOT_FOUND, msg)
     }
-    fn generic() -> Self {
-        HttpError::from("We encountered an error. Please try again later.".to_string())
-    }
 }
 
 impl From<String> for HttpError {
@@ -1175,25 +1309,23 @@ impl From<errors::Error> for HttpError {
             "getblock RPC error: {\"code\":-5,\"message\":\"Block not found\"}" => {
                 HttpError::not_found("Block not found".to_string())
             }
-            _ => HttpError::generic(),
+            _ => HttpError::from(e.to_string()),
         }
     }
 }
 impl From<serde_json::Error> for HttpError {
-    fn from(_e: serde_json::Error) -> Self {
-        //HttpError::from(e.description().to_string())
-        HttpError::generic()
+    fn from(e: serde_json::Error) -> Self {
+        HttpError::from(e.to_string())
     }
 }
 impl From<encode::Error> for HttpError {
-    fn from(_e: encode::Error) -> Self {
-        //HttpError::from(e.description().to_string())
-        HttpError::generic()
+    fn from(e: encode::Error) -> Self {
+        HttpError::from(e.to_string())
     }
 }
 impl From<std::string::FromUtf8Error> for HttpError {
-    fn from(_e: std::string::FromUtf8Error) -> Self {
-        HttpError::generic()
+    fn from(e: std::string::FromUtf8Error) -> Self {
+        HttpError::from(e.to_string())
     }
 }
 #[cfg(feature = "liquid")]

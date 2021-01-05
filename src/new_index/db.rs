@@ -85,10 +85,10 @@ impl DB {
         debug!("opening DB at {:?}", path);
         let mut db_opts = rocksdb::Options::default();
         db_opts.create_if_missing(true);
-        db_opts.set_max_open_files(-1); // TODO: make sure to `ulimit -n` this process correctly
+        db_opts.set_max_open_files(100_000); // TODO: make sure to `ulimit -n` this process correctly
         db_opts.set_compaction_style(rocksdb::DBCompactionStyle::Level);
         db_opts.set_compression_type(rocksdb::DBCompressionType::Snappy);
-        db_opts.set_target_file_size_base(256 << 20);
+        db_opts.set_target_file_size_base(1_073_741_824);
         db_opts.set_write_buffer_size(256 << 20);
         db_opts.set_disable_auto_compactions(true); // for initial bulk load
 
@@ -163,6 +163,9 @@ impl DB {
         rows.sort_unstable_by(|a, b| a.key.cmp(&b.key));
         let mut batch = rocksdb::WriteBatch::default();
         for row in rows {
+            #[cfg(not(feature = "oldcpu"))]
+            batch.put(&row.key, &row.value);
+            #[cfg(feature = "oldcpu")]
             batch.put(&row.key, &row.value).unwrap();
         }
         let do_flush = match flush {
@@ -211,37 +214,5 @@ impl DB {
             }
             Some(_) => (),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-
-    use crate::new_index::db::{DBRow, DB};
-    use tempfile;
-
-    #[test]
-    fn test_db_iterator() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = DB::open(dir.path());
-        let rows = vec![
-            DBRow {
-                key: b"X11".to_vec(),
-                value: b"a".to_vec(),
-            },
-            DBRow {
-                key: b"X22".to_vec(),
-                value: b"b".to_vec(),
-            },
-            DBRow {
-                key: b"X33".to_vec(),
-                value: b"c".to_vec(),
-            },
-        ];
-        for row in &rows {
-            db.put(&row.key, &row.value);
-        }
-        let actual: Vec<DBRow> = db.iter_scan(b"X").collect();
-        assert_eq!(rows, actual);
     }
 }

@@ -1,4 +1,3 @@
-use bincode;
 use bitcoin::blockdata::script::Script;
 use bitcoin::hashes::sha256d::Hash as Sha256dHash;
 #[cfg(not(feature = "liquid"))]
@@ -112,6 +111,10 @@ pub struct Utxo {
 
     #[cfg(feature = "liquid")]
     pub asset: elements::confidential::Asset,
+    #[cfg(feature = "liquid")]
+    pub nonce: elements::confidential::Nonce,
+    #[cfg(feature = "liquid")]
+    pub witness: elements::TxOutWitness,
 }
 
 impl From<&Utxo> for OutPoint {
@@ -166,6 +169,7 @@ pub struct Indexer {
 struct IndexerConfig {
     light_mode: bool,
     address_search: bool,
+    index_unspendables: bool,
     network: Network,
     #[cfg(feature = "liquid")]
     parent_network: Network,
@@ -176,6 +180,7 @@ impl From<&Config> for IndexerConfig {
         IndexerConfig {
             light_mode: config.light_mode,
             address_search: config.address_search,
+            index_unspendables: config.index_unspendables,
             network: config.network_type,
             #[cfg(feature = "liquid")]
             parent_network: config.parent_network,
@@ -415,20 +420,24 @@ impl ChainQuery {
         }
     }
 
+    pub fn get_block_header(&self, hash: &BlockHash) -> Option<BlockHeader> {
+        let _timer = self.start_timer("get_block_header");
+        Some(self.header_by_hash(hash)?.header().clone())
+    }
+
+    pub fn get_mtp(&self, height: usize) -> u32 {
+        let _timer = self.start_timer("get_block_mtp");
+        self.store.indexed_headers.read().unwrap().get_mtp(height)
+    }
+
     pub fn get_block_with_meta(&self, hash: &BlockHash) -> Option<BlockHeaderMeta> {
         let _timer = self.start_timer("get_block_with_meta");
+        let header_entry = self.header_by_hash(hash)?;
         Some(BlockHeaderMeta {
-            header_entry: self.header_by_hash(hash)?,
             meta: self.get_block_meta(hash)?,
+            mtp: self.get_mtp(header_entry.height()),
+            header_entry,
         })
-    }
-
-    pub fn iter_scan(&self, prefix: &[u8], start_at: &[u8]) -> ScanIterator {
-        self.store.history_db.iter_scan_from(prefix, start_at)
-    }
-
-    pub fn iter_scan_reverse(&self, prefix: &[u8], prefix_max: &[u8]) -> ReverseScanIterator {
-        self.store.history_db.iter_scan_reverse(prefix, prefix_max)
     }
 
     pub fn history_iter_scan(&self, code: u8, hash: &[u8], start_height: usize) -> ScanIterator {
@@ -504,7 +513,7 @@ impl ChainQuery {
     }
 
     // TODO: avoid duplication with stats/stats_delta?
-    pub fn utxo(&self, scripthash: &[u8]) -> Vec<Utxo> {
+    pub fn utxo(&self, scripthash: &[u8], limit: usize) -> Result<Vec<Utxo>> {
         let _timer = self.start_timer("utxo");
 
         // get the last known utxo set and the blockhash it was updated for.
@@ -523,9 +532,9 @@ impl ChainQuery {
 
         // update utxo set with new transactions since
         let (newutxos, lastblock, processed_items) = cache.map_or_else(
-            || self.utxo_delta(scripthash, HashMap::new(), 0),
-            |(oldutxos, blockheight)| self.utxo_delta(scripthash, oldutxos, blockheight + 1),
-        );
+            || self.utxo_delta(scripthash, HashMap::new(), 0, limit),
+            |(oldutxos, blockheight)| self.utxo_delta(scripthash, oldutxos, blockheight + 1, limit),
+        )?;
 
         // save updated utxo set to cache
         if let Some(lastblock) = lastblock {
@@ -538,7 +547,7 @@ impl ChainQuery {
         }
 
         // format as Utxo objects
-        newutxos
+        Ok(newutxos
             .into_iter()
             .map(|(outpoint, (blockid, value))| {
                 // in elements/liquid chains, we have to lookup the txo in order to get its
@@ -555,17 +564,22 @@ impl ChainQuery {
 
                     #[cfg(feature = "liquid")]
                     asset: txo.asset,
+                    #[cfg(feature = "liquid")]
+                    nonce: txo.nonce,
+                    #[cfg(feature = "liquid")]
+                    witness: txo.witness,
                 }
             })
-            .collect()
+            .collect())
     }
 
-    pub fn utxo_delta(
+    fn utxo_delta(
         &self,
         scripthash: &[u8],
         init_utxos: UtxoMap,
         start_height: usize,
-    ) -> (UtxoMap, Option<BlockHash>, usize) {
+        limit: usize,
+    ) -> Result<(UtxoMap, Option<BlockHash>, usize)> {
         let _timer = self.start_timer("utxo_delta");
         let history_iter = self
             .history_iter_scan(b'H', scripthash, start_height)
@@ -594,9 +608,14 @@ impl ChainQuery {
                 | TxHistoryInfo::Pegin(_)
                 | TxHistoryInfo::Pegout(_) => unreachable!(),
             };
+
+            // abort if the utxo set size excedees the limit at any point in time
+            if utxos.len() > limit {
+                bail!(ErrorKind::TooPopular)
+            }
         }
 
-        (utxos, lastblock, processed_items)
+        Ok((utxos, lastblock, processed_items))
     }
 
     pub fn stats(&self, scripthash: &[u8]) -> ScriptStats {
@@ -698,6 +717,7 @@ impl ChainQuery {
     }
 
     pub fn address_search(&self, prefix: &str, limit: usize) -> Vec<String> {
+        let _timer_scan = self.start_timer("address_search");
         self.store
             .history_db
             .iter_scan(&addr_search_filter(prefix))
@@ -886,6 +906,7 @@ impl ChainQuery {
 
     #[cfg(not(feature = "liquid"))]
     pub fn get_merkleblock_proof(&self, txid: &Txid) -> Option<MerkleBlock> {
+        let _timer = self.start_timer("get_merkleblock_proof");
         let blockid = self.tx_confirming_block(txid)?;
         let headerentry = self.header_by_hash(&blockid.hash)?;
         let block_txids = self.get_block_txids(&blockid.hash)?;
@@ -978,7 +999,7 @@ fn add_transaction(
 
     let txid = full_hash(&tx.txid()[..]);
     for (txo_index, txo) in tx.output.iter().enumerate() {
-        if !txo.script_pubkey.is_provably_unspendable() {
+        if is_spendable(txo) {
             rows.push(TxOutRow::new(&txid, txo_index, txo).into_row());
         }
     }
@@ -1065,7 +1086,7 @@ fn index_transaction(
     //      S{funding-txid:vout}{spending-txid:vin} → ""
     let txid = full_hash(&tx.txid()[..]);
     for (txo_index, txo) in tx.output.iter().enumerate() {
-        if is_spendable(txo) {
+        if is_spendable(txo) || iconfig.index_unspendables {
             let history = TxHistoryRow::new(
                 &txo.script_pubkey,
                 confirmed_height,

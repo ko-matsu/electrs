@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, RwLock};
 
 use bitcoin::hashes::{hex::FromHex, sha256, Hash};
 use bitcoin::{BlockHash, Txid};
@@ -23,8 +24,8 @@ lazy_static! {
             .unwrap();
 }
 
-pub fn parse_asset_id(hash: &[u8]) -> AssetId {
-    deserialize(hash).expect("failed to parse AssetId")
+fn parse_asset_id(sl: &[u8]) -> AssetId {
+    AssetId::from_slice(sl).expect("failed to parse AssetId")
 }
 
 #[derive(Serialize)]
@@ -108,6 +109,40 @@ impl IssuedAsset {
             chain_stats,
             mempool_stats,
             meta,
+        }
+    }
+}
+
+impl LiquidAsset {
+    pub fn supply(&self) -> Option<u64> {
+        match self {
+            LiquidAsset::Native(asset) => Some(
+                asset.chain_stats.peg_in_amount
+                    - asset.chain_stats.peg_out_amount
+                    - asset.chain_stats.burned_amount
+                    + asset.mempool_stats.peg_in_amount
+                    - asset.mempool_stats.peg_out_amount
+                    - asset.mempool_stats.burned_amount,
+            ),
+            LiquidAsset::Issued(asset) => {
+                if asset.chain_stats.has_blinded_issuances
+                    || asset.mempool_stats.has_blinded_issuances
+                {
+                    None
+                } else {
+                    Some(
+                        asset.chain_stats.issued_amount - asset.chain_stats.burned_amount
+                            + asset.mempool_stats.issued_amount
+                            - asset.mempool_stats.burned_amount,
+                    )
+                }
+            }
+        }
+    }
+    pub fn precision(&self) -> u8 {
+        match self {
+            LiquidAsset::Native(_) => 8,
+            LiquidAsset::Issued(asset) => asset.meta.as_ref().map_or(0, |m| m.precision),
         }
     }
 }
@@ -309,10 +344,11 @@ fn asset_history_row(
 
 pub fn lookup_asset(
     query: &Query,
-    registry: Option<&AssetRegistry>,
+    registry: Option<&Arc<RwLock<AssetRegistry>>>,
     asset_id: &AssetId,
+    meta: Option<&AssetMeta>, // may optionally be provided if already known
 ) -> Result<Option<LiquidAsset>> {
-    if asset_id == query.network.native_asset() {
+    if asset_id == query.network().native_asset() {
         let (chain_stats, mempool_stats) = native_asset_stats(query);
 
         return Ok(Some(LiquidAsset::Native(NativeAsset {
@@ -336,7 +372,10 @@ pub fn lookup_asset(
     Ok(if let Some(row) = row {
         let reissuance_token = parse_asset_id(&row.reissuance_token);
 
-        let meta = registry.map_or_else(|| Ok(None), |r| r.load(asset_id))?;
+        let registry = registry.map(|r| r.read().unwrap());
+        let meta = meta
+            .or_else(|| registry.as_ref().and_then(|r| r.get(asset_id)))
+            .cloned();
         let stats = issued_asset_stats(query, asset_id, &reissuance_token);
         let status = query.get_tx_status(&deserialize(&row.issuance_txid).unwrap());
 
@@ -369,7 +408,7 @@ pub fn get_issuance_entropy(txin: &TxIn) -> Result<sha256::Midstate> {
 // Asset stats
 //
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct IssuedAssetStats {
     pub tx_count: usize,
     pub issuance_count: usize,
@@ -380,21 +419,7 @@ pub struct IssuedAssetStats {
     pub burned_reissuance_tokens: u64,
 }
 
-impl Default for IssuedAssetStats {
-    fn default() -> Self {
-        Self {
-            tx_count: 0,
-            issuance_count: 0,
-            issued_amount: 0,
-            burned_amount: 0,
-            has_blinded_issuances: false,
-            reissuance_tokens: None,
-            burned_reissuance_tokens: 0,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct NativeAssetStats {
     pub tx_count: usize,
     pub peg_in_count: usize,
@@ -403,20 +428,6 @@ pub struct NativeAssetStats {
     pub peg_out_amount: u64,
     pub burn_count: usize,
     pub burned_amount: u64,
-}
-
-impl Default for NativeAssetStats {
-    fn default() -> Self {
-        Self {
-            tx_count: 0,
-            peg_in_count: 0,
-            peg_in_amount: 0,
-            peg_out_count: 0,
-            peg_out_amount: 0,
-            burn_count: 0,
-            burned_amount: 0,
-        }
-    }
 }
 
 type AssetStatApplyFn<T> = fn(&TxHistoryInfo, &mut T, &mut HashSet<Txid>);
@@ -437,7 +448,7 @@ where
 
 // Get stats for the network's native asset
 fn native_asset_stats(query: &Query) -> (NativeAssetStats, NativeAssetStats) {
-    let asset_id = query.network.native_asset();
+    let asset_id = query.network().native_asset();
 
     (
         chain_asset_stats(query.chain(), asset_id, apply_native_asset_stats),
