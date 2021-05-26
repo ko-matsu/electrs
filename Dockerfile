@@ -1,5 +1,5 @@
 # バイナリを alpine で動作させるために rust:1.48.0 でなく rust:1.48.0-alpine でビルドする
-FROM rust:1.48.0-alpine as electrs_builder
+FROM rust:1.48.0-alpine3.12 as electrs_builder
 COPY . /app
 ENV RUSTFLAGS="-Ctarget-feature=-crt-static"
 RUN apk add git clang cmake && \
@@ -8,7 +8,7 @@ RUN apk add git clang cmake && \
     rustup component add rustfmt --toolchain 1.48.0-x86_64-unknown-linux-musl && \
     cd /app && \
     cargo build --release --features liquid --bin electrs
-FROM alpine as electrs
+FROM alpine:3.12 as electrs
 RUN apk add gcc libstdc++
 COPY --from=electrs_builder /app/target/release/electrs /bin
 CMD sh -c "electrs -vvvv --network=liquidregtest"
