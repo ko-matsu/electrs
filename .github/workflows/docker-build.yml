@@ -37,13 +37,13 @@ jobs:
           context: .
           push: true
           tags: |
-            ${{ github.repository }}:latest
-            ${{ github.repository }}:${{ steps.tagname.outputs.tagname }}-${{ steps.short-sha.outputs.sha8 }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/electrs:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/electrs:${{ steps.tagname.outputs.tagname }}-${{ steps.short-sha.outputs.sha8 }}
 
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: ${{ github.repository }}:${{ steps.tagname.outputs.tagname }}-${{ steps.short-sha.outputs.sha8 }}
+          image-ref: ${{ secrets.DOCKERHUB_USERNAME }}/electrs:${{ steps.tagname.outputs.tagname }}-${{ steps.short-sha.outputs.sha8 }}
           format: table
           exit-code: 1
           severity: CRITICAL,HIGH
@@ -80,12 +80,12 @@ jobs:
           file: ./Dockerfile_bitcoin
           push: true
           tags: |
-            ${{ github.repository }}:${{ steps.tagname.outputs.tagname }}-${{ steps.short-sha.outputs.sha8 }}-bitcoin
+            ${{ secrets.DOCKERHUB_USERNAME }}/electrs:${{ steps.tagname.outputs.tagname }}-${{ steps.short-sha.outputs.sha8 }}-bitcoin
 
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: ${{ github.repository }}:${{ steps.tagname.outputs.tagname }}-${{ steps.short-sha.outputs.sha8 }}-bitcoin
+          image-ref: ${{ secrets.DOCKERHUB_USERNAME }}/electrs:${{ steps.tagname.outputs.tagname }}-${{ steps.short-sha.outputs.sha8 }}-bitcoin
           format: table
           exit-code: 1
           severity: CRITICAL,HIGH
