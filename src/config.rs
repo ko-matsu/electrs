@@ -9,6 +9,7 @@ use stderrlog;
 
 use crate::chain::Network;
 use crate::daemon::CookieGetter;
+use crate::json_logger::JsonLogger;
 
 use crate::errors::*;
 
@@ -18,6 +19,7 @@ const ELECTRS_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub struct Config {
     // See below for the documentation of each field:
     pub log: stderrlog::StdErrLog,
+    pub json_log: JsonLogger,
     pub network_type: Network,
     pub db_path: PathBuf,
     pub daemon_dir: PathBuf,
@@ -79,6 +81,11 @@ impl Config {
                 Arg::with_name("timestamp")
                     .long("timestamp")
                     .help("Prepend log lines with a timestamp"),
+            )
+            .arg(
+                Arg::with_name("json_log")
+                    .long("json-log")
+                    .help("Output log with a json format"),
             )
             .arg(
                 Arg::with_name("db_dir")
@@ -343,15 +350,22 @@ impl Config {
             .map(|s| serde_json::from_str(s).expect("invalid --electrum-public-hosts"));
 
         let mut log = stderrlog::new();
-        log.verbosity(m.occurrences_of("verbosity") as usize);
-        log.timestamp(if m.is_present("timestamp") {
-            stderrlog::Timestamp::Millisecond
+        let mut json_log = JsonLogger::new();
+        if m.is_present("json_log") {
+            json_log.verbosity(m.occurrences_of("verbosity") as usize);
+            json_log.init().expect("logging initialization failed");
         } else {
-            stderrlog::Timestamp::Off
-        });
-        log.init().expect("logging initialization failed");
+            log.verbosity(m.occurrences_of("verbosity") as usize);
+            log.timestamp(if m.is_present("timestamp") {
+                stderrlog::Timestamp::Millisecond
+            } else {
+                stderrlog::Timestamp::Off
+            });
+            log.init().expect("logging initialization failed");
+        }
         let config = Config {
             log,
+            json_log,
             network_type,
             db_path,
             daemon_dir,

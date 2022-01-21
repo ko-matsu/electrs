@@ -23,6 +23,7 @@ extern crate serde_json;
 extern crate lazy_static;
 
 pub mod chain;
+pub mod json_logger;
 pub mod config;
 pub mod daemon;
 pub mod electrum;
