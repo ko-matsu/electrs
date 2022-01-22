@@ -32,6 +32,7 @@ pub struct Config {
     pub monitoring_addr: SocketAddr,
     pub jsonrpc_import: bool,
     pub light_mode: bool,
+    pub ignore_warn_feeinfo: bool,
     pub address_search: bool,
     pub index_unspendables: bool,
     pub cors: Option<String>,
@@ -86,6 +87,11 @@ impl Config {
                 Arg::with_name("json_log")
                     .long("json-log")
                     .help("Output log with a json format"),
+            )
+            .arg(
+                Arg::with_name("ignore_warn_feeinfo")
+                    .long("ignore-warn-feeinfo")
+                    .help("Ignore mempool feeinfo warning"),
             )
             .arg(
                 Arg::with_name("db_dir")
@@ -381,6 +387,7 @@ impl Config {
             monitoring_addr,
             jsonrpc_import: m.is_present("jsonrpc_import"),
             light_mode: m.is_present("light_mode"),
+            ignore_warn_feeinfo: m.is_present("ignore_warn_feeinfo"),
             address_search: m.is_present("address_search"),
             index_unspendables: m.is_present("index_unspendables"),
             cors: m.value_of("cors").map(|s| s.to_string()),
