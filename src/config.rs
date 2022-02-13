@@ -89,6 +89,11 @@ impl Config {
                     .help("Output log with a json format"),
             )
             .arg(
+                Arg::with_name("config_log_info")
+                    .long("config-log-info")
+                    .help("Output config log to information level"),
+            )
+            .arg(
                 Arg::with_name("ignore_warn_feeinfo")
                     .long("ignore-warn-feeinfo")
                     .help("Ignore mempool feeinfo warning"),
@@ -405,7 +410,11 @@ impl Config {
             #[cfg(feature = "electrum-discovery")]
             tor_proxy: m.value_of("tor_proxy").map(|s| s.parse().unwrap()),
         };
-        eprintln!("{:?}", config);
+        if m.is_present("config_log_info") {
+            info!("{:?}", config)
+        } else {
+            eprintln!("{:?}", config);
+        }
         config
     }
 
