@@ -94,6 +94,11 @@ impl Config {
                     .help("Output config log to information level"),
             )
             .arg(
+                Arg::with_name("config_mask_password")
+                    .long("config-mask-password")
+                    .help("Mask config password for output log"),
+            )
+            .arg(
                 Arg::with_name("ignore_warn_feeinfo")
                     .long("ignore-warn-feeinfo")
                     .help("Ignore mempool feeinfo warning"),
@@ -410,10 +415,15 @@ impl Config {
             #[cfg(feature = "electrum-discovery")]
             tor_proxy: m.value_of("tor_proxy").map(|s| s.parse().unwrap()),
         };
+
+        let mut dump_info: Config = config.clone();
+        if m.is_present("config_mask_password") {
+            dump_info.cookie = Some("********".to_string());   // for bitcoin rpc account & password
+        }
         if m.is_present("config_log_info") {
-            info!("{:?}", config)
+            info!("{:?}", dump_info)
         } else {
-            eprintln!("{:?}", config);
+            eprintln!("{:?}", dump_info);
         }
         config
     }
