@@ -1,6 +1,6 @@
 use log::{Level, Log, Metadata, Record, SetLoggerError};
 use std::default::Default;
-use std::io::{self, Stdout, BufWriter};
+use std::io::{self, Stdout};
 use std::fmt;
 use chrono::{Utc, SecondsFormat};
 use std::io::Write;
