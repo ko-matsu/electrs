@@ -9,6 +9,7 @@ use stderrlog;
 
 use crate::chain::Network;
 use crate::daemon::CookieGetter;
+use crate::json_logger::JsonLogger;
 
 use crate::errors::*;
 
@@ -18,6 +19,7 @@ const ELECTRS_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub struct Config {
     // See below for the documentation of each field:
     pub log: stderrlog::StdErrLog,
+    pub json_log: JsonLogger,
     pub network_type: Network,
     pub db_path: PathBuf,
     pub daemon_dir: PathBuf,
@@ -30,6 +32,7 @@ pub struct Config {
     pub monitoring_addr: SocketAddr,
     pub jsonrpc_import: bool,
     pub light_mode: bool,
+    pub ignore_warn_feeinfo: bool,
     pub address_search: bool,
     pub index_unspendables: bool,
     pub cors: Option<String>,
@@ -79,6 +82,26 @@ impl Config {
                 Arg::with_name("timestamp")
                     .long("timestamp")
                     .help("Prepend log lines with a timestamp"),
+            )
+            .arg(
+                Arg::with_name("json_log")
+                    .long("json-log")
+                    .help("Output log with a json format"),
+            )
+            .arg(
+                Arg::with_name("config_log_info")
+                    .long("config-log-info")
+                    .help("Output config log to information level"),
+            )
+            .arg(
+                Arg::with_name("config_mask_password")
+                    .long("config-mask-password")
+                    .help("Mask config password for output log"),
+            )
+            .arg(
+                Arg::with_name("ignore_warn_feeinfo")
+                    .long("ignore-warn-feeinfo")
+                    .help("Ignore mempool feeinfo warning"),
             )
             .arg(
                 Arg::with_name("db_dir")
@@ -343,15 +366,22 @@ impl Config {
             .map(|s| serde_json::from_str(s).expect("invalid --electrum-public-hosts"));
 
         let mut log = stderrlog::new();
-        log.verbosity(m.occurrences_of("verbosity") as usize);
-        log.timestamp(if m.is_present("timestamp") {
-            stderrlog::Timestamp::Millisecond
+        let mut json_log = JsonLogger::new();
+        if m.is_present("json_log") {
+            json_log.verbosity(m.occurrences_of("verbosity") as usize);
+            json_log.init().expect("logging initialization failed");
         } else {
-            stderrlog::Timestamp::Off
-        });
-        log.init().expect("logging initialization failed");
+            log.verbosity(m.occurrences_of("verbosity") as usize);
+            log.timestamp(if m.is_present("timestamp") {
+                stderrlog::Timestamp::Millisecond
+            } else {
+                stderrlog::Timestamp::Off
+            });
+            log.init().expect("logging initialization failed");
+        }
         let config = Config {
             log,
+            json_log,
             network_type,
             db_path,
             daemon_dir,
@@ -367,6 +397,7 @@ impl Config {
             monitoring_addr,
             jsonrpc_import: m.is_present("jsonrpc_import"),
             light_mode: m.is_present("light_mode"),
+            ignore_warn_feeinfo: m.is_present("ignore_warn_feeinfo"),
             address_search: m.is_present("address_search"),
             index_unspendables: m.is_present("index_unspendables"),
             cors: m.value_of("cors").map(|s| s.to_string()),
@@ -384,7 +415,16 @@ impl Config {
             #[cfg(feature = "electrum-discovery")]
             tor_proxy: m.value_of("tor_proxy").map(|s| s.parse().unwrap()),
         };
-        eprintln!("{:?}", config);
+
+        let mut dump_info: Config = config.clone();
+        if m.is_present("config_mask_password") {
+            dump_info.cookie = Some("********".to_string());   // for bitcoin rpc account & password
+        }
+        if m.is_present("config_log_info") {
+            info!("{:?}", dump_info)
+        } else {
+            eprintln!("{:?}", dump_info);
+        }
         config
     }
 
