@@ -481,7 +481,11 @@ impl Mempool {
                 .unwrap_or_else(|| panic!("missing mempool tx {}", txid));
 
             self.feeinfo.remove(*txid).or_else(|| {
-                warn!("missing mempool tx feeinfo {}", txid);
+                if self.config.ignore_warn_feeinfo {
+                    info!("missing mempool tx feeinfo {}", txid);
+                } else {
+                    warn!("missing mempool tx feeinfo {}", txid);
+                }
                 None
             });
         }

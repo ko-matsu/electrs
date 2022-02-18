@@ -93,6 +93,7 @@ fn bitcoind_fetcher(
                     })
                     .collect();
                 assert_eq!(block_entries.len(), entries.len());
+                trace!("fetch {} blocks", block_entries.len());
                 sender
                     .send(block_entries)
                     .expect("failed to send fetched blocks");
