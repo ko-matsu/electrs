@@ -1,13 +1,12 @@
-use crate::chain::BlockHeader;
+use crate::chain::{BlockHash, BlockHeader};
 use crate::errors::*;
 use crate::new_index::BlockEntry;
-
-use bitcoin::{BitcoinHash, BlockHash};
 
 use std::collections::HashMap;
 use std::fmt;
 use std::iter::FromIterator;
 use std::slice;
+use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime as DateTime;
 
 const MTP_SPAN: usize = 11;
@@ -52,13 +51,13 @@ impl HeaderEntry {
 
 impl fmt::Debug for HeaderEntry {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let last_block_time = DateTime::from_unix_timestamp(self.header().time as i64);
+        let last_block_time = DateTime::from_unix_timestamp(self.header().time as i64).unwrap();
         write!(
             f,
             "hash={} height={} @ {}",
             self.hash(),
             self.height(),
-            last_block_time.format(time::Format::Rfc3339),
+            last_block_time.format(&Rfc3339).unwrap(),
         )
     }
 }
@@ -97,7 +96,7 @@ impl HeaderList {
                 panic!(
                     "missing expected blockhash in headers map: {:?}, pointed from: {:?}",
                     blockhash,
-                    headers_chain.last().map(|h| h.bitcoin_hash())
+                    headers_chain.last().map(|h| h.block_hash())
                 )
             });
             blockhash = header.prev_blockhash;
@@ -124,7 +123,7 @@ impl HeaderList {
         }
         let hashed_headers =
             Vec::<HashedHeader>::from_iter(new_headers.into_iter().map(|header| HashedHeader {
-                blockhash: header.bitcoin_hash(),
+                blockhash: header.block_hash(),
                 header,
             }));
         for i in 1..hashed_headers.len() {
