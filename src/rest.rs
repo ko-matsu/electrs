@@ -156,8 +156,8 @@ impl TransactionValue {
             locktime: tx.lock_time,
             vin: vins,
             vout: vouts,
-            size: tx.get_size() as u32,
-            weight: tx.get_weight() as u32,
+            size: tx.size() as u32,
+            weight: tx.weight() as u32,
             fee,
             status: Some(TransactionStatus::from(blockid)),
         }
@@ -438,9 +438,9 @@ impl From<Utxo> for UtxoValue {
             surjection_proof: utxo
                 .witness
                 .surjection_proof
-                .map_or(vec![], |p| p.serialize()),
+                .map_or(vec![], |p| (*p).serialize()),
             #[cfg(feature = "liquid")]
-            range_proof: utxo.witness.rangeproof.map_or(vec![], |p| p.serialize()),
+            range_proof: utxo.witness.rangeproof.map_or(vec![], |p| (*p).serialize()),
         }
     }
 }
