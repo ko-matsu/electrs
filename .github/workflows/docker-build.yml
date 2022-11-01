@@ -4,32 +4,55 @@ on:
   push:
     tags:
       - 'v*'
+  pull_request:
+    types: [opened, reopened, synchronize]
 
 jobs:
   build_and_push_elements_image:
     runs-on: ubuntu-20.04
     steps:
       - name: checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v1
+        uses: docker/setup-buildx-action@v2
+        with:
+          config-inline: |
+            [worker.oci]
+              max-parallelism = 1
 
       - name: Login to Docker Hub
-        uses: docker/login-action@v1
+        if: ${{ github.event_name != 'pull_request' }}
+        uses: docker/login-action@v2
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Get nearest tagname
+        if: ${{ github.event_name != 'pull_request' }}
         id: tagname
         run: echo ::set-output name=tagname::${GITHUB_REF/refs\/tags\//}
 
-      - name: Build and push
-        uses: docker/build-push-action@v2
+      - name: Build only
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: docker/build-push-action@v3
         with:
           context: .
-          push: true
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: |
+            ${{ github.repository }}:latest
+
+      - name: Build and push
+        if: ${{ github.event_name != 'pull_request' }}
+        uses: docker/build-push-action@v3
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
           tags: |
             ${{ github.repository }}:latest
             ${{ github.repository }}:${{ steps.tagname.outputs.tagname }}
@@ -37,7 +60,7 @@ jobs:
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: ${{ github.repository }}:${{ steps.tagname.outputs.tagname }}
+          image-ref: ${{ github.repository }}:latest
           format: table
           exit-code: 1
           severity: CRITICAL,HIGH
@@ -46,34 +69,57 @@ jobs:
     runs-on: ubuntu-20.04
     steps:
       - name: checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v1
+        uses: docker/setup-buildx-action@v2
+        with:
+          config-inline: |
+            [worker.oci]
+              max-parallelism = 1
 
       - name: Login to Docker Hub
-        uses: docker/login-action@v1
+        if: ${{ github.event_name != 'pull_request' }}
+        uses: docker/login-action@v2
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Get nearest tagname
+        if: ${{ github.event_name != 'pull_request' }}
         id: tagname
         run: echo ::set-output name=tagname::${GITHUB_REF/refs\/tags\//}
 
-      - name: Build and push
-        uses: docker/build-push-action@v2
+      - name: Build only
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: docker/build-push-action@v3
         with:
           context: .
           file: ./Dockerfile_bitcoin
-          push: true
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
           tags: |
+            ${{ github.repository }}:latest-bitcoin
+
+      - name: Build and push
+        if: ${{ github.event_name != 'pull_request' }}
+        uses: docker/build-push-action@v3
+        with:
+          context: .
+          file: ./Dockerfile_bitcoin
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: |
+            ${{ github.repository }}:latest-bitcoin
             ${{ github.repository }}:${{ steps.tagname.outputs.tagname }}-bitcoin
 
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: ${{ github.repository }}:${{ steps.tagname.outputs.tagname }}-bitcoin
+          image-ref: ${{ github.repository }}:latest-bitcoin
           format: table
           exit-code: 1
           severity: CRITICAL,HIGH
