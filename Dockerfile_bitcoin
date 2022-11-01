@@ -1,15 +1,15 @@
-# バイナリを alpine で動作させるために rust:1.48.0 でなく rust:1.48.0-alpine でビルドする
+# バイナリを alpine で動作させるために rust:1.64.0 でなく rust:1.64.0-alpine でビルドする
 FROM --platform=$TARGETPLATFORM rust:1.64.0-alpine3.15 as electrs_builder
 COPY . /app
 ENV RUSTFLAGS="-Ctarget-feature=-crt-static"
 ARG TARGETARCH
 RUN if [ "$TARGETARCH" = "arm64" ]; then \
-      export RUST_TOOLCHAIN=1.64.0-aarch64-unknown-linux-musl ;\
+      RUST_TOOLCHAIN=1.64.0-aarch64-unknown-linux-musl ;\
     else \
-      export RUST_TOOLCHAIN=1.64.0-x86_64-unknown-linux-musl ;\
+      RUST_TOOLCHAIN=1.64.0-x86_64-unknown-linux-musl ;\
     fi && \
     apk add git clang cmake && \
-    # rust:1.48.0-alpine でビルドするのに必要なパッケージ
+    # rust:1.64.0-alpine でビルドするのに必要なパッケージ
     apk add gcc g++ linux-headers llvm-dev musl-dev musl-utils && \
     rustup component add rustfmt --toolchain $RUST_TOOLCHAIN && \
     cd /app && \
