@@ -36,6 +36,9 @@ jobs:
         if: ${{ github.event_name == 'pull_request' }}
         uses: docker/build-push-action@v3
         with:
+          config-inline: |
+            [worker.oci]
+              max-parallelism = 1
           context: .
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
@@ -46,6 +49,9 @@ jobs:
         if: ${{ github.event_name != 'pull_request' }}
         uses: docker/build-push-action@v3
         with:
+          config-inline: |
+            [worker.oci]
+              max-parallelism = 1
           context: .
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
@@ -89,6 +95,9 @@ jobs:
         if: ${{ github.event_name == 'pull_request' }}
         uses: docker/build-push-action@v3
         with:
+          config-inline: |
+            [worker.oci]
+              max-parallelism = 1
           context: .
           file: ./Dockerfile_bitcoin
           platforms: linux/amd64,linux/arm64
@@ -100,6 +109,9 @@ jobs:
         if: ${{ github.event_name != 'pull_request' }}
         uses: docker/build-push-action@v3
         with:
+          config-inline: |
+            [worker.oci]
+              max-parallelism = 1
           context: .
           file: ./Dockerfile_bitcoin
           platforms: linux/amd64,linux/arm64
