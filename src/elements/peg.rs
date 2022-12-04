@@ -8,7 +8,7 @@ pub fn get_pegin_data(txout: &TxIn, network: Network) -> Option<PeginData> {
     let pegged_asset_id = network.pegged_asset()?;
     txout
         .pegin_data()
-        .filter(|pegin| pegin.asset == Asset::Explicit(*pegged_asset_id))
+        .filter(|pegin| pegin.asset == *pegged_asset_id)
 }
 
 pub fn get_pegout_data(
@@ -44,7 +44,11 @@ impl PegoutValue {
         Some(PegoutValue {
             genesis_hash: pegoutdata.genesis_hash.to_hex(),
             scriptpubkey_asm: scriptpubkey.to_asm(),
-            scriptpubkey_address: address.map(|s| s.to_string()),
+            scriptpubkey_address: if let Ok(addr) = address {
+                Some(addr.to_string())
+            } else {
+                None
+            },
             scriptpubkey,
         })
     }

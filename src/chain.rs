@@ -1,15 +1,15 @@
 #[cfg(not(feature = "liquid"))] // use regular Bitcoin data structures
 pub use bitcoin::{
-    blockdata::script, consensus::deserialize, util::address, Block, BlockHash, BlockHeader,
-    OutPoint, Script, Transaction, TxIn, TxOut, Txid,
+    blockdata::script, consensus::deserialize, hash_types::BlockHash, util::address, Block,
+    BlockHeader, OutPoint, Script, Transaction, TxIn, TxOut, Txid,
 };
 
 #[cfg(feature = "liquid")]
 pub use {
     crate::elements::asset,
     elements::{
-        address, confidential, encode::deserialize, script, Address, AssetId, Block, BlockHash,
-        BlockHeader, OutPoint, Script, Transaction, TxIn, TxOut, Txid,
+        address, confidential, encode::deserialize, hash_types::BlockHash, script, Address,
+        AssetId, Block, BlockHeader, OutPoint, Script, Transaction, TxIn, TxOut, Txid,
     },
 };
 
@@ -125,15 +125,15 @@ pub fn genesis_hash(network: Network) -> BlockHash {
     return liquid_genesis_hash(network);
 }
 
-pub fn bitcoin_genesis_hash(network: BNetwork) -> bitcoin::BlockHash {
+pub fn bitcoin_genesis_hash(network: BNetwork) -> bitcoin::hash_types::BlockHash {
     lazy_static! {
-        static ref BITCOIN_GENESIS: bitcoin::BlockHash =
+        static ref BITCOIN_GENESIS: bitcoin::hash_types::BlockHash =
             genesis_block(BNetwork::Bitcoin).block_hash();
-        static ref TESTNET_GENESIS: bitcoin::BlockHash =
+        static ref TESTNET_GENESIS: bitcoin::hash_types::BlockHash =
             genesis_block(BNetwork::Testnet).block_hash();
-        static ref REGTEST_GENESIS: bitcoin::BlockHash =
+        static ref REGTEST_GENESIS: bitcoin::hash_types::BlockHash =
             genesis_block(BNetwork::Regtest).block_hash();
-        static ref SIGNET_GENESIS: bitcoin::BlockHash =
+        static ref SIGNET_GENESIS: bitcoin::hash_types::BlockHash =
             genesis_block(BNetwork::Signet).block_hash();
     }
     match network {
@@ -145,7 +145,7 @@ pub fn bitcoin_genesis_hash(network: BNetwork) -> bitcoin::BlockHash {
 }
 
 #[cfg(feature = "liquid")]
-pub fn liquid_genesis_hash(network: Network) -> elements::BlockHash {
+pub fn liquid_genesis_hash(network: Network) -> elements::hash_types::BlockHash {
     lazy_static! {
         static ref LIQUID_GENESIS: BlockHash =
             "1466275836220db2944ca059a3a10ef6fd2ea684b0688d2c379296888a206003"
@@ -158,7 +158,7 @@ pub fn liquid_genesis_hash(network: Network) -> elements::BlockHash {
         // The genesis block for liquid regtest chains varies based on the chain configuration.
         // This instead uses an all zeroed-out hash, which doesn't matter in practice because its
         // only used for Electrum server discovery, which isn't active on regtest.
-        _ => Default::default(),
+        _ => BlockHash::from_hash(bitcoin_hashes::Hash::all_zeros()),
     }
 }
 

@@ -583,7 +583,7 @@ impl Daemon {
             result.append(&mut headers);
         }
 
-        let mut blockhash = BlockHash::default();
+        let mut blockhash: BlockHash = BlockHash::from_hash(bitcoin_hashes::Hash::all_zeros());
         for header in &result {
             assert_eq!(header.prev_blockhash, blockhash);
             blockhash = header.block_hash();
@@ -609,7 +609,7 @@ impl Daemon {
             bestblockhash,
         );
         let mut new_headers = vec![];
-        let null_hash = BlockHash::default();
+        let null_hash = BlockHash::from_hash(bitcoin_hashes::Hash::all_zeros());
         let mut blockhash = *bestblockhash;
         while blockhash != null_hash {
             if indexed_headers.header_by_blockhash(&blockhash).is_some() {

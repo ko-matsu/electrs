@@ -92,7 +92,9 @@ impl BlockValue {
             size: blockhm.meta.size,
             weight: blockhm.meta.weight,
             merkle_root: header.merkle_root.to_hex(),
-            previousblockhash: if header.prev_blockhash != BlockHash::default() {
+            previousblockhash: if header.prev_blockhash
+                != BlockHash::from_hash(bitcoin_hashes::Hash::all_zeros())
+            {
                 Some(header.prev_blockhash.to_hex())
             } else {
                 None
@@ -153,7 +155,7 @@ impl TransactionValue {
         TransactionValue {
             txid: tx.txid(),
             version: tx.version as u32,
-            locktime: tx.lock_time,
+            locktime: tx.lock_time.to_u32(),
             vin: vins,
             vout: vouts,
             size: tx.size() as u32,
@@ -221,7 +223,7 @@ impl TxInValue {
                 .map(ScriptToAsm::to_asm),
 
             is_coinbase,
-            sequence: txin.sequence,
+            sequence: txin.sequence.to_consensus_u32(),
             #[cfg(feature = "liquid")]
             is_pegin: txin.is_pegin,
             #[cfg(feature = "liquid")]
@@ -349,8 +351,8 @@ impl TxOutValue {
 }
 fn is_v1_p2tr(script: &Script) -> bool {
     script.len() == 34
-        && script[0] == opcodes::all::OP_PUSHNUM_1.into_u8()
-        && script[1] == opcodes::all::OP_PUSHBYTES_32.into_u8()
+        && script[0] == opcodes::all::OP_PUSHNUM_1.to_u8()
+        && script[1] == opcodes::all::OP_PUSHBYTES_32.to_u8()
 }
 
 #[derive(Serialize)]

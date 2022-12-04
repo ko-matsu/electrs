@@ -271,7 +271,8 @@ fn index_tx_assets(
     for (txi_index, txi) in tx.input.iter().enumerate() {
         if let Some(pegin) = get_pegin_data(txi, network) {
             history.push((
-                pegin.asset.explicit().unwrap(),
+                //pegin.asset.explicit().unwrap(),
+                pegin.asset,
                 TxHistoryInfo::Pegin(PeginInfo {
                     txid,
                     vin: txi_index as u16,
@@ -392,7 +393,7 @@ pub fn lookup_asset(
 }
 
 pub fn get_issuance_entropy(txin: &TxIn) -> Result<sha256::Midstate> {
-    if !txin.has_issuance {
+    if !txin.has_issuance() {
         bail!("input has no issuance");
     }
 

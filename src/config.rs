@@ -451,7 +451,7 @@ impl Config {
 
         let mut dump_info: Config = config.clone();
         if m.is_present("config_mask_password") {
-            dump_info.cookie = Some("********".to_string());   // for bitcoin rpc account & password
+            dump_info.cookie = Some("********".to_string()); // for bitcoin rpc account & password
         }
         if m.is_present("config_log_info") {
             info!("{:?}", dump_info)

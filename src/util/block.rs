@@ -73,7 +73,7 @@ impl HeaderList {
         HeaderList {
             headers: vec![],
             heights: HashMap::new(),
-            tip: BlockHash::default(),
+            tip: BlockHash::from_hash(bitcoin_hashes::Hash::all_zeros()),
         }
     }
 
@@ -89,7 +89,7 @@ impl HeaderList {
 
         let mut blockhash = tip_hash;
         let mut headers_chain: Vec<BlockHeader> = vec![];
-        let null_hash = BlockHash::default();
+        let null_hash = BlockHash::from_hash(bitcoin_hashes::Hash::all_zeros());
 
         while blockhash != null_hash {
             let header = headers_map.remove(&blockhash).unwrap_or_else(|| {
@@ -136,7 +136,7 @@ impl HeaderList {
             Some(h) => h.header.prev_blockhash,
             None => return vec![], // hashed_headers is empty
         };
-        let null_hash = BlockHash::default();
+        let null_hash = BlockHash::from_hash(bitcoin_hashes::Hash::all_zeros());
         let new_height: usize = if prev_blockhash == null_hash {
             0
         } else {
@@ -170,7 +170,7 @@ impl HeaderList {
                 let expected_prev_blockhash = if height > 0 {
                     *self.headers[height - 1].hash()
                 } else {
-                    BlockHash::default()
+                    BlockHash::from_hash(bitcoin_hashes::Hash::all_zeros())
                 };
                 assert_eq!(entry.header().prev_blockhash, expected_prev_blockhash);
                 height
@@ -216,7 +216,10 @@ impl HeaderList {
     pub fn tip(&self) -> &BlockHash {
         assert_eq!(
             self.tip,
-            self.headers.last().map(|h| *h.hash()).unwrap_or_default()
+            self.headers
+                .last()
+                .map(|h| *h.hash())
+                .unwrap_or_else(|| BlockHash::from_hash(bitcoin_hashes::Hash::all_zeros()))
         );
         &self.tip
     }
