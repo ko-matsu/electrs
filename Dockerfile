@@ -2,6 +2,7 @@
 FROM --platform=$TARGETPLATFORM rust:1.64.0-alpine3.15 as electrs_builder
 COPY . /app
 ENV RUSTFLAGS="-Ctarget-feature=-crt-static"
+ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
 ARG TARGETARCH
 RUN if [ "$TARGETARCH" = "arm64" ]; then \
       RUST_TOOLCHAIN=1.64.0-aarch64-unknown-linux-musl ;\
