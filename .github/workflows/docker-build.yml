@@ -14,16 +14,18 @@ env:
 jobs:
   check_image_env:
     runs-on: ubuntu-20.04
-    env:
-      USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
       - name: stop CI
-        if: ${{ env.USERNAME == '' }}
-        uses: andymckay/cancel-action@0.3
-      - name: wait for stop CI
-        if: ${{ env.USERNAME == '' }}
+        if: ${{ github.event_name != 'pull_request' }}
         shell: bash
-        run: while true; do echo "Waiting for job to be cancelled"; sleep 5; done
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ secrets.DOCKERHUB_USERNAME }}" != "" ]; then
+              exit 0 ;
+          fi
+          curl -X POST -H "Content-Type: application/json" -H "Authorization: token $TOKEN" https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/cancel
+          while true; do echo "Waiting for job to be cancelled"; sleep 5; done
 
   build_and_push_elements_image:
     runs-on: ubuntu-20.04
@@ -78,7 +80,7 @@ jobs:
         uses: docker/build-push-action@v3
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -159,7 +161,7 @@ jobs:
         with:
           context: .
           file: ./Dockerfile_bitcoin
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
