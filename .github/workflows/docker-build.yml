@@ -197,7 +197,7 @@ jobs:
         if: ${{ github.event_name != 'pull_request' }}
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: ${{ steps.image_path.outputs.IMAGE_PATH }}:${{ steps.get_version.outputs.VERSION }}
+          image-ref: ${{ steps.image_path.outputs.IMAGE_PATH }}:${{ steps.get_version.outputs.VERSION }}-bitcoin
           format: table
           exit-code: 1
           severity: CRITICAL,HIGH
