@@ -679,6 +679,14 @@ impl Config {
             tor_proxy: m.value_of("tor_proxy").map(|s| s.parse().unwrap()),
         };
 
+        match &config.cookie {
+            Some(auth) => log::debug!("daemon authentication: {:?}", auth),
+            None => log::debug!(
+                "daemon authentication: CookieFile({:?})",
+                config.daemon_dir.join(".cookie")
+            ),
+        }
+
         let mut dump_info: Config = config.clone();
         if m.is_present("config_mask_password") {
             dump_info.cookie = Some(SensitiveAuth::new("********".to_string())); // for bitcoin rpc account & password
