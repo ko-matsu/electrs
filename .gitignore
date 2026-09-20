@@ -6,3 +6,5 @@ target
 *.pyc
 result
 .direnv
+.claude/
+CLAUDE.md
