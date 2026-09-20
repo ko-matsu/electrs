@@ -94,7 +94,8 @@ fn bitcoind_fetcher(
             for entries in new_headers.chunks(batch_size) {
                 if fetcher_count % 50 == 0 && total_blocks_fetched >= 50 {
                     let batch_height = entries.last().map(|e| e.height()).unwrap_or(0);
-                    info!("fetching blocks {}/{} ({:.1}%)",
+                    info!(
+                        "fetching blocks {}/{} ({:.1}%)",
                         batch_height,
                         chain_tip_height,
                         batch_height as f32 / chain_tip_height.max(1) as f32 * 100.0
@@ -159,17 +160,24 @@ fn blkfiles_fetcher(
                     .into_iter()
                     .filter_map(|(block, size)| {
                         index += 1;
-                        debug!("fetch block {:}/{:} {:.2}%",
+                        debug!(
+                            "fetch block {:}/{:} {:.2}%",
                             index,
                             block_count,
-                            (index/block_count) as f32/100.0
+                            (index / block_count) as f32 / 100.0
                         );
                         let blockhash = block.block_hash();
                         entry_map
                             .remove(&blockhash)
                             .map(|entry| {
-                                let txids = block.txdata.iter().map(|tx| tx.compute_txid()).collect();
-                                BlockEntry { block, entry, size, txids }
+                                let txids =
+                                    block.txdata.iter().map(|tx| tx.compute_txid()).collect();
+                                BlockEntry {
+                                    block,
+                                    entry,
+                                    size,
+                                    txids,
+                                }
                             })
                             .or_else(|| {
                                 trace!("skipping block {}", blockhash);
@@ -204,7 +212,8 @@ fn blkfiles_reader(blk_files: Vec<PathBuf>, xor_key: Option<[u8; 8]>) -> Fetcher
         spawn_thread("blkfiles_reader", move || {
             let blk_files_len = blk_files.len();
             for (count, path) in blk_files.iter().enumerate() {
-                info!("block file reading {:}/{:} {:.2}%",
+                info!(
+                    "block file reading {:}/{:} {:.2}%",
                     count,
                     blk_files_len,
                     count / blk_files_len
@@ -248,7 +257,8 @@ fn blkfiles_parser(blobs: Fetcher<Vec<u8>>, magic: u32) -> Fetcher<Vec<SizedBloc
                 .unwrap();
             blobs.map(|blob| {
                 trace!("parsing {} bytes", blob.len());
-                let blocks = parse_blocks(&pool, blob, magic).expect("failed to parse blk*.dat file");
+                let blocks =
+                    parse_blocks(&pool, blob, magic).expect("failed to parse blk*.dat file");
                 sender
                     .send(blocks)
                     .expect("failed to send blocks from blk*.dat file");

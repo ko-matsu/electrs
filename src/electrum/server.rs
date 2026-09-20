@@ -15,10 +15,6 @@ use serde_json::{from_str, Value};
 
 use electrs_macros::trace;
 
-#[cfg(not(feature = "liquid"))]
-use bitcoin::consensus::encode::serialize_hex;
-#[cfg(feature = "liquid")]
-use elements::encode::serialize_hex;
 use crate::chain::Txid;
 use crate::config::{Config, RpcLogging};
 use crate::electrum::{get_electrum_height, ProtocolVersion};
@@ -27,6 +23,10 @@ use crate::metrics::{Gauge, HistogramOpts, HistogramVec, MetricOpts, Metrics};
 use crate::new_index::{Query, Utxo};
 use crate::util::electrum_merkle::{get_header_merkle_proof, get_id_from_pos, get_tx_merkle_proof};
 use crate::util::{create_socket, spawn_thread, BlockId, BoolThen, Channel, FullHash, HeaderEntry};
+#[cfg(not(feature = "liquid"))]
+use bitcoin::consensus::encode::serialize_hex;
+#[cfg(feature = "liquid")]
+use elements::encode::serialize_hex;
 
 const ELECTRS_VERSION: &str = env!("CARGO_PKG_VERSION");
 const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(1, 4);
@@ -106,9 +106,9 @@ impl JsonRpcV2Error {
 fn jsonrpc_code(e: &Error) -> JsonRpcV2Error {
     match e.kind() {
         ErrorKind::InvalidParams(_) => JsonRpcV2Error::InvalidParams,
-        ErrorKind::TooPopular
-        | ErrorKind::TooManyUtxos
-        | ErrorKind::TooManySubscriptions(_) => JsonRpcV2Error::BadRequest,
+        ErrorKind::TooPopular | ErrorKind::TooManyUtxos | ErrorKind::TooManySubscriptions(_) => {
+            JsonRpcV2Error::BadRequest
+        }
         // The daemon could not be reached (or we refused to queue for it) for a request
         // made on the client's behalf. This is a downstream failure, not a client error.
         ErrorKind::RpcError(..) | ErrorKind::DaemonBusy(_) | ErrorKind::DaemonUnavailable(_) => {
@@ -794,7 +794,11 @@ impl Connection {
             }
             _ => {
                 warn!("[{}] invalid request: {}", self.addr, cmd);
-                json_rpc_error("invalid request", cmd.get("id"), JsonRpcV2Error::InvalidRequest)
+                json_rpc_error(
+                    "invalid request",
+                    cmd.get("id"),
+                    JsonRpcV2Error::InvalidRequest,
+                )
             }
         }
     }
@@ -1204,7 +1208,7 @@ impl RPC {
         config: Arc<Config>,
         query: Arc<Query>,
         metrics: &Metrics,
-        salt_rwlock: Arc<RwLock<String>>
+        salt_rwlock: Arc<RwLock<String>>,
     ) -> RPC {
         let stats = Arc::new(Stats {
             latency: metrics.histogram_vec(

@@ -19,9 +19,6 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::convert::TryInto;
 use std::sync::{Arc, RwLock, RwLockReadGuard};
 
-use crate::{chain::{
-    BlockHash, BlockHeader, Network, OutPoint, Script, Transaction, TxOut, Txid, Value,
-}, new_index::db_metrics::RocksDbMetrics};
 use crate::config::Config;
 use crate::daemon::Daemon;
 use crate::errors::*;
@@ -29,6 +26,10 @@ use crate::metrics::{Gauge, HistogramOpts, HistogramTimer, HistogramVec, MetricO
 use crate::util::{
     bincode, full_hash, has_prevout, is_spendable, BlockHeaderMeta, BlockId, BlockMeta,
     BlockStatus, Bytes, HeaderEntry, HeaderList, ScriptToAddr,
+};
+use crate::{
+    chain::{BlockHash, BlockHeader, Network, OutPoint, Script, Transaction, TxOut, Txid, Value},
+    new_index::db_metrics::RocksDbMetrics,
 };
 
 use crate::new_index::db::{DBFlush, DBRow, ReverseScanIterator, ScanIterator, DB};
@@ -66,7 +67,10 @@ impl Store {
         // needs without being artificially capped at 1/3 of the total.
         let cache_size_bytes = config.db_block_cache_mb * 1024 * 1024;
         let shared_cache = rocksdb::Cache::new_lru_cache(cache_size_bytes);
-        debug!("shared LRU block cache: db_block_cache_mb='{}'", config.db_block_cache_mb);
+        debug!(
+            "shared LRU block cache: db_block_cache_mb='{}'",
+            config.db_block_cache_mb
+        );
 
         let txstore_db = DB::open(&path.join("txstore"), config, verify_compat, &shared_cache);
         let added_blockhashes = load_blockhashes(&txstore_db, &BlockRow::done_filter());
@@ -370,8 +374,14 @@ impl Indexer {
 
             // Fetch the reorged blocks, then undo their history index db rows.
             // The txstore db rows are kept for reorged blocks/transactions.
-            start_fetcher(self.from, &daemon, reorged_headers, self.iconfig.block_batch_size, chain_tip_height)?
-                .map(|blocks| self.undo_index(&blocks));
+            start_fetcher(
+                self.from,
+                &daemon,
+                reorged_headers,
+                self.iconfig.block_batch_size,
+                chain_tip_height,
+            )?
+            .map(|blocks| self.undo_index(&blocks));
         }
 
         // Single-pass: add to txstore and index to history in the same per-batch loop.
@@ -398,7 +408,14 @@ impl Indexer {
         let mut fetcher_count = 0;
         let to_process_total = to_process.len();
 
-        start_fetcher(self.from, &daemon, to_process, self.iconfig.block_batch_size, chain_tip_height)?.map(|blocks| {
+        start_fetcher(
+            self.from,
+            &daemon,
+            to_process,
+            self.iconfig.block_batch_size,
+            chain_tip_height,
+        )?
+        .map(|blocks| {
             if fetcher_count % 25 == 0 && to_process_total > 20 {
                 let batch_height = blocks.last().map(|b| b.entry.height()).unwrap_or(0);
                 info!(
@@ -443,7 +460,8 @@ impl Indexer {
                 let h = last.entry.height();
                 self.sync_height.set(h as i64);
                 if chain_tip_height > 0 {
-                    self.sync_progress.set(h as f64 / chain_tip_height as f64 * 100.0);
+                    self.sync_progress
+                        .set(h as f64 / chain_tip_height as f64 * 100.0);
                 }
             }
         });
@@ -1392,7 +1410,6 @@ fn index_transaction(
     rows: &mut Vec<DBRow>,
     iconfig: &IndexerConfig,
 ) {
-
     // persist tx confirmation row:
     //      C{txid} → "{block_height}"
     rows.push(TxConfRow::new(txid, confirmed_height).into_row());
@@ -1831,8 +1848,7 @@ impl TxEdgeRow {
     }
 
     fn key(outpoint: &OutPoint) -> Bytes {
-        bincode::serialize_little(&(b'S', full_hash(&outpoint.txid[..]), outpoint.vout))
-            .unwrap()
+        bincode::serialize_little(&(b'S', full_hash(&outpoint.txid[..]), outpoint.vout)).unwrap()
     }
 
     pub fn into_row(self) -> DBRow {

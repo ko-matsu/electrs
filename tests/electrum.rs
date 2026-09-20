@@ -33,8 +33,7 @@ impl WalletTester {
             vec!["--server", &server_arg]
         };
         electrum_wallet_conf.view_stdout = true;
-        let electrum_wallet =
-            ElectrumD::with_conf(electrumd::exe_path()?, &electrum_wallet_conf)?;
+        let electrum_wallet = ElectrumD::with_conf(electrumd::exe_path()?, &electrum_wallet_conf)?;
 
         log::info!(
             "Electrum wallet version: {:?}",
@@ -51,7 +50,9 @@ impl WalletTester {
     fn notify_wallet(&self) {
         self.electrum_server.notify();
         std::thread::sleep(std::time::Duration::from_millis(200));
-        self.electrum_wallet.call("wait_for_sync", &json!([])).unwrap();
+        self.electrum_wallet
+            .call("wait_for_sync", &json!([]))
+            .unwrap();
     }
 
     fn assert_balance(&self, confirmed: f64, unconfirmed: f64) {
@@ -433,7 +434,12 @@ fn test_electrum_broadcast_package_updates_mempool() -> Result<()> {
     );
     let v: electrumd::jsonrpc::serde_json::Value =
         electrumd::jsonrpc::serde_json::from_str(&s).unwrap();
-    assert_eq!(v["result"]["success"].as_bool(), Some(true), "response: {}", s);
+    assert_eq!(
+        v["result"]["success"].as_bool(),
+        Some(true),
+        "response: {}",
+        s
+    );
 
     // the accepted tx must now be visible in the scripthash history immediately
     assert_eq!(

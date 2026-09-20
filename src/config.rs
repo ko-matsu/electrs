@@ -544,14 +544,11 @@ impl Config {
                 0 => None, // 0 = unlimited / never disconnect
                 secs => Some(Duration::from_secs(secs)),
             };
-        let electrum_rpc_max_request_num_bytes: usize = match value_t_or_exit!(
-            m,
-            "electrum_rpc_max_request_num_bytes",
-            usize
-        ) {
-            0 => usize::MAX, // 0 = unlimited
-            bytes => bytes,
-        };
+        let electrum_rpc_max_request_num_bytes: usize =
+            match value_t_or_exit!(m, "electrum_rpc_max_request_num_bytes", usize) {
+                0 => usize::MAX, // 0 = unlimited
+                bytes => bytes,
+            };
         let http_addr: SocketAddr = str_to_socketaddr(
             m.value_of("http_addr")
                 .unwrap_or(&format!("127.0.0.1:{}", default_http_port)),
@@ -689,7 +686,8 @@ impl Config {
 
         let mut dump_info: Config = config.clone();
         if m.is_present("config_mask_password") {
-            dump_info.cookie = Some(SensitiveAuth::new("********".to_string())); // for bitcoin rpc account & password
+            dump_info.cookie = Some(SensitiveAuth::new("********".to_string()));
+            // for bitcoin rpc account & password
         }
         if m.is_present("config_log_info") {
             info!("{:?}", dump_info)

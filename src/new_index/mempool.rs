@@ -505,14 +505,16 @@ impl Mempool {
                 .remove(*txid)
                 .unwrap_or_else(|| panic!("missing mempool tx {}", txid));
 
-            self.feeinfo.remove(*txid).or_else(|| {
-                if self.config.ignore_warn_feeinfo {
+            if self.config.ignore_warn_feeinfo {
+                self.feeinfo.remove(*txid).or_else(|| {
                     info!("missing mempool tx feeinfo {}", txid);
-                } else {
-                    warn!("missing mempool tx feeinfo {}", txid);
-                }
-                None
-            });
+                    None
+                });
+            } else {
+                self.feeinfo.remove(*txid).unwrap_or_else(|| {
+                    panic!("missing mempool tx feeinfo {}", txid);
+                });
+            }
 
             let scripthashes = self
                 .tx_scripthashes
@@ -546,9 +548,7 @@ impl Mempool {
                     Entry::Vacant(_) => {
                         warn!(
                             "mempool edge for outpoint {}:{} already gone (evicting {})",
-                            txin.previous_output.txid,
-                            txin.previous_output.vout,
-                            txid
+                            txin.previous_output.txid, txin.previous_output.vout, txid
                         );
                     }
                 }

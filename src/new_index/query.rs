@@ -91,7 +91,9 @@ impl Query {
         maxfeerate: Option<f64>,
         maxburnamount: Option<f64>,
     ) -> Result<SubmitPackageResult> {
-        let result = self.daemon.submit_package(txhex, maxfeerate, maxburnamount)?;
+        let result = self
+            .daemon
+            .submit_package(txhex, maxfeerate, maxburnamount)?;
         // Add accepted txs to the local mempool so subscription status updates reflect them
         // immediately (they read from the local mempool), mirroring broadcast_raw() above.
         let accepted_txids = result.accepted_txids();
